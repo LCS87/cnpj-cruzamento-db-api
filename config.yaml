@@ -1,0 +1,72 @@
+# Configurações do Sistema de Cruzamento de CNPJs
+
+database:
+  table: estabelecimentos
+  columns:
+    situacao: situacao_cadastral
+    motivo: motivo_situacao_cadastral
+
+api:
+  timeout: 15
+  max_retries: 3
+  delay_between_retries: 1
+
+processing:
+  batch_size: 100
+  show_progress_every: 10
+  update_interval_seconds: 2
+
+output:
+  separator: ";"
+  encoding: "utf-8"
+  quote_minimal: true
+  add_timestamp: true
+
+mappings:
+  situacao:
+    '1': 'NULA'
+    '2': 'ATIVA'
+    '3': 'SUSPENSA'
+    '4': 'INAPTA'
+    '8': 'BAIXADA'
+  
+  motivo:
+    '00': "SEM MOTIVO"
+    '01': "EXTINCAO POR ENCERRAMENTO LIQUIDACAO VOLUNTARIA"
+    '02': "EXTINCAO POR ENCERRAMENTO FORCADA"
+    '03': "EXTINCAO PELO ENCERRAMENTO DA LIQUIDACAO JUDICIAL"
+    '04': "EXTINCAO POR INCORPORACAO"
+    '05': "EXTINCAO POR FUSAO"
+    '06': "EXTINCAO POR CISÃO"
+    '07': "ENCERRAMENTO POR ENCERRAMENTO DE CUMPRIMENTO DE SENTENÇA JUDICIAL"
+    '08': "EXTINCAO PELA CANCELAMENTO"
+    '09': "OMISSA DE CONTRIBUICAO"
+    '10': "BAIXA INICIADA EM PROCESSO ADMINISTRATIVO"
+    '11': "BAIXA INICIADA POR DETERMINACAO DO RESPONSAVEL"
+    '12': "BAIXA INICIADA POR SOLICITACAO DO EMPRESARIO"
+
+columns:
+  # Nomes alternativos para coluna CNPJ
+  cnpj_aliases:
+    - 'cnpj'
+    - 'cnpj_completo'
+    - 'cnpj_base'
+    - 'cnpj_num'
+    - 'documento'
+    - 'cnpj_cpf'
+  
+  # Colunas de resultado
+  output_columns:
+    db_status: 'Status_CNPJ_DB'
+    db_motivo: 'Motivo_Detalhado_DB'
+    api_status: 'Status_CNPJ_API'
+    api_razao: 'razao_social_API'
+    api_fantasia: 'nome_fantasia_API'
+    api_error: 'Erro_Consulta_API'
+    comparison_status: 'STATUS_CADASTRO_FINAL'
+    comparison_razao: 'RAZAO_SOCIAL_COMPARA'
+
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "cnpj_cruzamento.log"
