@@ -1,3 +1,8 @@
+# Pastas de dados do projeto (não versionar)
+input/
+output_cruzamento/
+*.log
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
