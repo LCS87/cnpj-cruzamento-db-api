@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cruzamento de CNPJs — Painel</title>
+  <style>
+    :root {
+      --primary: #1e6f5c;
+      --primary-dark: #14523f;
+      --bg: #f3f6f5;
+      --card: #ffffff;
+      --text: #1f2a37;
+      --muted: #6b7a8c;
+      --ok: #16a34a;
+      --warn: #d97706;
+      --err: #dc2626;
+      --radius: 12px;
+      --shadow: 0 2px 10px rgba(16, 42, 67, 0.08);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
+      background: var(--bg); color: var(--text); min-height: 100vh;
+      display: flex; flex-direction: column;
+    }
+    header {
+      background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+      color: #fff; padding: 22px 28px;
+      display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;
+    }
+    header h1 { font-size: 1.35rem; font-weight: 600; }
+    header .health { font-size: 0.85rem; opacity: 0.9; display: flex; gap: 14px; align-items: center; }
+    .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; background: #9ca3af; }
+    .dot.ok { background: #4ade80; } .dot.bad { background: #f87171; }
+    main { flex: 1; max-width: 980px; width: 100%; margin: 26px auto; padding: 0 18px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+      padding: 22px;
+    }
+    .card h2 { font-size: 1.05rem; margin-bottom: 14px; color: var(--primary-dark); }
+    .dropzone {
+      border: 2px dashed #b8c6c1; border-radius: var(--radius); padding: 30px 16px;
+      text-align: center; color: var(--muted); cursor: pointer; transition: all .2s;
+    }
+    .dropzone:hover, .dropzone.drag { border-color: var(--primary); background: #eef6f3; color: var(--primary-dark); }
+    .dropzone strong { color: var(--primary-dark); }
+    input[type="file"] { display: none; }
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px; border: none; cursor: pointer;
+      background: var(--primary); color: #fff; font-size: 0.95rem; font-weight: 600;
+      padding: 11px 20px; border-radius: 8px; transition: background .2s; margin-top: 14px;
+    }
+    .btn:hover:not(:disabled) { background: var(--primary-dark); }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn.secondary { background: #e5eabf00; color: var(--primary-dark); border: 1.5px solid var(--primary); }
+    .progress-wrap { margin-top: 18px; display: none; }
+    .bar-bg { background: #e3e9e6; border-radius: 999px; height: 14px; overflow: hidden; }
+    .bar-fill { background: linear-gradient(90deg, var(--primary), #34d399); height: 100%; width: 0%; transition: width .6s ease; }
+    .progress-label { font-size: 0.85rem; color: var(--muted); margin-top: 8px; display: flex; justify-content: space-between; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 6px; }
+    @media (max-width: 760px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+    .stat { background: #f6f8f7; border-radius: 10px; padding: 14px 10px; text-align: center; }
+    .stat .num { font-size: 1.5rem; font-weight: 700; }
+    .stat .lbl { font-size: 0.75rem; color: var(--muted); margin-top: 3px; text-transform: uppercase; letter-spacing: .04em; }
+    .num.ok { color: var(--ok); } .num.warn { color: var(--warn); } .num.err { color: var(--err); }
+    .badge { display: inline-block; padding: 4px 12px; border-radius: 999px; font-size: 0.8rem; font-weight: 600; }
+    .badge.pending { background: #eef2ff; color: #4338ca; }
+    .badge.processing { background: #fef9c3; color: #a16207; }
+    .badge.done { background: #dcfce7; color: #15803d; }
+    .badge.error { background: #fee2e2; color: #b91c1c; }
+    #jobInfo { margin-top: 14px; display: none; }
+    .msg { margin-top: 12px; font-size: 0.9rem; padding: 10px 14px; border-radius: 8px; display: none; }
+    .msg.error { background: #fee2e2; color: #b91c1c; display: block; }
+    .hint { font-size: 0.82rem; color: var(--muted); margin-top: 12px; line-height: 1.5; }
+    footer { text-align: center; color: var(--muted); font-size: 0.8rem; padding: 16px; }
+    a.dl { text-decoration: none; }
+    ul.docs { padding-left: 18px; font-size: 0.9rem; color: var(--muted); line-height: 1.8; }
+    ul.docs a { color: var(--primary); }
+    code { background: #eef2f0; padding: 2px 6px; border-radius: 5px; font-size: 0.85em; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🔎 Cruzamento de CNPJs</h1>
+    <div class="health">
+      <span><span id="dotDb" class="dot"></span>Banco de dados</span>
+      <span><span id="dotApi" class="dot"></span>Token Invertexto</span>
+      <span><span id="dotAuth" class="dot"></span>Autenticação</span>
+    </div>
+  </header>
+
+  <main>
+    <!-- Autenticação -->
+    <section class="card" style="margin-bottom:20px;">
+      <h2>🔑 Chave de API</h2>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+        <input id="apiKeyInput" type="password" placeholder="X-API-Key (ex.: cnpj_…)" style="flex:1;min-width:240px;padding:10px 12px;border:1.5px solid #cfd8d4;border-radius:8px;font-size:.95rem;" />
+        <button class="btn secondary" id="btnSalvarKey" style="margin-top:0;">Salvar</button>
+      </div>
+      <p class="hint">A chave é guardada apenas no seu navegador (localStorage) e enviada no header <code>X-API-Key</code>. Gere uma com <code>python -m api.keygen</code>.</p>
+    </section>
+
+    <div class="grid">
+      <!-- Upload -->
+      <section class="card">
+        <h2>1. Enviar arquivo</h2>
+        <label id="drop" class="dropzone" for="fileInput">
+          <div style="font-size:2rem;margin-bottom:6px;">📄</div>
+          <strong>Clique para selecionar</strong> ou arraste um arquivo aqui<br/>
+          <span style="font-size:.8rem">Formatos aceitos: CSV, XLSX, XLS</span>
+        </label>
+        <input type="file" id="fileInput" accept=".csv,.xlsx,.xls" />
+        <div id="fileName" class="hint"></div>
+        <button class="btn" id="btnEnviar" disabled>Iniciar cruzamento</button>
+        <div id="msgUpload" class="msg"></div>
+
+        <div class="progress-wrap" id="progressWrap">
+          <div class="bar-bg"><div class="bar-fill" id="barFill"></div></div>
+          <div class="progress-label">
+            <span id="progText">Aguardando…</span>
+            <span id="progPct">0%</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Resultado -->
+      <section class="card">
+        <h2>2. Resultado</h2>
+        <div id="jobInfo">
+          <p>Status: <span id="statusBadge" class="badge pending">pending</span></p>
+          <div class="stats" style="margin-top:14px;">
+            <div class="stat"><div class="num" id="stTotal">–</div><div class="lbl">Total</div></div>
+            <div class="stat"><div class="num ok" id="stCoincide">–</div><div class="lbl">Coincide</div></div>
+            <div class="stat"><div class="num warn" id="stDivergente">–</div><div class="lbl">Divergente</div></div>
+            <div class="stat"><div class="num err" id="stErros">–</div><div class="lbl">Erros</div></div>
+          </div>
+          <p class="hint" id="stTempo"></p>
+          <a id="btnDownload" class="btn secondary a-dl" style="display:none" href="#" download>⬇️ Baixar resultado (CSV)</a>
+          <p class="msg error" id="msgError"></p>
+        </div>
+        <p class="hint" id="waitingHint">Envie um arquivo para ver as estatísticas do cruzamento aqui.</p>
+      </section>
+    </div>
+
+    <!-- Consulta individual + docs -->
+    <div class="grid" style="margin-top:20px;">
+      <section class="card">
+        <h2>Consulta rápida de um CNPJ</h2>
+        <input id="cnpjInput" placeholder="Ex.: 11.222.333/0001-81" style="width:100%;padding:10px 12px;border:1.5px solid #cfd8d4;border-radius:8px;font-size:.95rem;" />
+        <button class="btn" id="btnConsultar">Consultar</button>
+        <pre id="cnpjResult" class="hint" style="white-space:pre-wrap;margin-top:12px;"></pre>
+      </section>
+      <section class="card">
+        <h2>Documentação da API</h2>
+        <ul class="docs">
+          <li><a href="/docs" target="_blank">Swagger / OpenAPI (<code>/docs</code>)</a></li>
+          <li><a href="/redoc" target="_blank">ReDoc (<code>/redoc</code>)</a></li>
+          <li><code>POST /v1/cruzamento/upload</code> — envia arquivo e cria job</li>
+          <li><code>GET&nbsp;/v1/cruzamento/{job_id}/status</code> — progresso em tempo real</li>
+          <li><code>GET&nbsp;/v1/cruzamento/{job_id}/download</code> — baixa o CSV resultante</li>
+          <li><code>GET&nbsp;/v1/cnpj/{cnpj}</code> — consulta individual</li>
+        </ul>
+      </section>
+    </div>
+  </main>
+
+  <footer>Sistema de Cruzamento de CNPJs · DB local × API Invertexto</footer>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const drop = $("drop"), fileInput = $("fileInput"), btnEnviar = $("btnEnviar");
+    let selectedFile = null, currentJobId = null, pollTimer = null;
+
+    // ---------- Autenticação ----------
+    function getApiKey() { return localStorage.getItem("api_key") || ""; }
+    function authHeaders(extra = {}) {
+      const h = { ...extra };
+      const k = getApiKey();
+      if (k) h["X-API-Key"] = k;
+      return h;
+    }
+    $("btnSalvarKey").addEventListener("click", () => {
+      localStorage.setItem("api_key", $("apiKeyInput").value.trim());
+      loadHealth();
+      $("apiKeyInput").value = "";
+    });
+    $("apiKeyInput").value = "";
+
+    // ---------- Health ----------
+    async function loadHealth() {
+      try {
+        const r = await fetch("/v1/health", { headers: authHeaders() });
+        const h = await r.json();
+        $("dotDb").className = "dot " + (h.db === "online" ? "ok" : "bad");
+        $("dotApi").className = "dot " + (h.api_token === "configurado" ? "ok" : "bad");
+        if (h.auth !== undefined) {
+          $("dotAuth").className = "dot " + (h.auth === "ativada" ? "ok" : "");
+          $("dotAuth").title = "Autenticação " + h.auth;
+        }
+        if (r.status === 401) $("dotAuth").className = "dot bad";
+      } catch { /* offline */ }
+    }
+    loadHealth(); setInterval(loadHealth, 30000);
+
+    // ---------- Upload ----------
+    fileInput.addEventListener("change", () => setFile(fileInput.files[0]));
+    ["dragover","dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("drag"); }));
+    ["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("drag"); }));
+    drop.addEventListener("drop", e => setFile(e.dataTransfer.files[0]));
+
+    function setFile(f) {
+      if (!f) return;
+      const ok = /\.(csv|xlsx|xls)$/i.test(f.name);
+      selectedFile = ok ? f : null;
+      $("fileName").textContent = ok ? `Selecionado: ${f.name} (${(f.size/1024).toFixed(1)} KB)` : "";
+      msg("msgUpload", ok ? "" : "Extensão inválida. Use CSV, XLSX ou XLS.", !ok);
+      btnEnviar.disabled = !ok;
+    }
+
+    function msg(id, text, isError) {
+      const el = $(id);
+      el.className = "msg" + (isError ? " error" : "");
+      el.textContent = text;
+      el.style.display = text ? "block" : "none";
+    }
+
+    btnEnviar.addEventListener("click", async () => {
+      if (!selectedFile) return;
+      btnEnviar.disabled = true;
+      msg("msgUpload", "Enviando arquivo…", false);
+      $("msgUpload").style.display = "block";
+      const fd = new FormData();
+      fd.append("file", selectedFile);
+      try {
+        const r = await fetch("/v1/cruzamento/upload", { method: "POST", body: fd, headers: authHeaders() });
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({}));
+          throw new Error(e.detail || `HTTP ${r.status}`);
+        }
+        const job = await r.json();
+        startJob(job.job_id);
+        msg("msgUpload", "", false);
+      } catch (err) {
+        msg("msgUpload", "Falha no upload: " + err.message, true);
+        btnEnviar.disabled = false;
+      }
+    });
+
+    // ---------- Polling de status ----------
+    function startJob(jobId) {
+      currentJobId = jobId;
+      $("jobInfo").style.display = "block";
+      $("waitingHint").style.display = "none";
+      $("progressWrap").style.display = "block";
+      $("btnDownload").style.display = "none";
+      $("msgError").style.display = "none";
+      setStatus("pending");
+      $("barFill").style.width = "2%";
+      $("progText").textContent = "Processando: " + (selectedFile ? selectedFile.name : jobId);
+      $("progPct").textContent = "0%";
+      pollTimer = setInterval(pollStatus, 2000);
+      pollStatus();
+    }
+
+    function mostrarErroDownload(texto) {
+      const el = $("msgError");
+      el.textContent = "❌ " + texto;
+      el.style.display = "block";
+    }
+
+    function setStatus(s) {
+      const b = $("statusBadge");
+      b.textContent = s;
+      b.className = "badge " + s;
+    }
+
+    async function pollStatus() {
+      if (!currentJobId) return;
+      try {
+        const r = await fetch(`/v1/cruzamento/${currentJobId}/status`, { headers: authHeaders() });
+        if (!r.ok) throw new Error("job não encontrado");
+        const j = await r.json();
+        setStatus(j.status);
+
+        if (j.total) {
+          $("stTotal").textContent = j.total.toLocaleString("pt-BR");
+          $("progPct").textContent = (j.progresso_pct ?? 0) + "%";
+          $("barFill").style.width = Math.max(2, j.progresso_pct ?? 0) + "%";
+          $("progText").textContent = `Processados: ${(j.processados ?? 0).toLocaleString("pt-BR")} de ${j.total.toLocaleString("pt-BR")}`;
+        }
+
+        if (j.status === "done") {
+          clearInterval(pollTimer); pollTimer = null;
+          $("barFill").style.width = "100%";
+          $("progPct").textContent = "100%";
+          $("progText").textContent = "Concluído ✔";
+          $("stCoincide").textContent = (j.coincide ?? 0).toLocaleString("pt-BR");
+          $("stDivergente").textContent = (j.divergente ?? 0).toLocaleString("pt-BR");
+          $("stErros").textContent = (j.erros ?? 0).toLocaleString("pt-BR");
+          $("stTempo").textContent = j.tempo_segundos ? `Tempo total: ${j.tempo_segundos}s` : "";
+          const dl = $("btnDownload");
+          dl.onclick = async (ev) => {
+            ev.preventDefault();
+            try {
+              const resp = await fetch(`/v1/cruzamento/${currentJobId}/download`, { headers: authHeaders() });
+              if (!resp.ok) { const e = await resp.json().catch(() => ({})); throw new Error(e.detail || `HTTP ${resp.status}`); }
+              const blob = await resp.blob();
+              const a = document.createElement("a");
+              a.href = URL.createObjectURL(blob);
+              a.download = "resultado_CRUZAMENTO.csv";
+              a.click();
+              URL.revokeObjectURL(a.href);
+            } catch (err) { mostrarErroDownload("Falha no download: " + err.message); }
+          };
+          dl.style.display = "inline-flex";
+          btnEnviar.disabled = false;
+        } else if (j.status === "error") {
+          clearInterval(pollTimer); pollTimer = null;
+          $("msgError").textContent = "❌ " + (j.mensagem || "Erro desconhecido no processamento.");
+          $("msgError").style.display = "block";
+          $("barFill").style.width = "100%";
+          $("barFill").style.background = "var(--err)";
+          btnEnviar.disabled = false;
+        }
+      } catch (e) {
+        clearInterval(pollTimer); pollTimer = null;
+        $("msgError").textContent = "❌ Falha ao consultar status: " + e.message;
+        $("msgError").style.display = "block";
+        btnEnviar.disabled = false;
+      }
+    }
+
+    // ---------- Consulta individual ----------
+    $("btnConsultar").addEventListener("click", async () => {
+      const raw = $("cnpjInput").value.trim();
+      if (!raw) { $("cnpjResult").textContent = "Informe um CNPJ."; return; }
+      $("btnConsultar").disabled = true;
+      $("cnpjResult").textContent = "Consultando…";
+      try {
+        const digits = raw.replace(/\D/g, "");
+        const r = await fetch(`/v1/cnpj/${digits}`, { headers: authHeaders() });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        $("cnpjResult").textContent =
+          `CNPJ: ${data.cnpj}\n` +
+          `Situação (DB):  ${data.status_db ?? "-"}\n` +
+          `Motivo (DB):    ${data.motivo_db ?? "-"}\n` +
+          `Situação (API): ${data.status_api ?? "-"}\n` +
+          `Razão social:   ${data.razao_social_api ?? "-"}\n` +
+          `Nome fantasia:  ${data.nome_fantasia_api ?? "-"}\n` +
+          `Resultado:      ${data.status_final ?? "-"}${data.erro_api ? "\nErro API: " + data.erro_api : ""}`;
+      } catch (e) {
+        $("cnpjResult").textContent = "❌ " + e.message;
+      } finally {
+        $("btnConsultar").disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

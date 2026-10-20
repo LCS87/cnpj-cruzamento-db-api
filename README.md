@@ -18,9 +18,12 @@ api/                  ← API REST (FastAPI)
   models.py
   jobs.py
   routes/
-    health.py         ← GET /health
+    health.py         ← GET /v1/health
     cnpj.py           ← GET /v1/cnpj/{cnpj}
     cruzamento.py     ← POST/GET /v1/cruzamento/...
+  web/
+    ui.py             ← GET / (serve o painel)
+    index.html        ← interface web (HTML/CSS/JS puro)
 src/
   config.py           ← configurações via .env + config.yaml
   utils.py            ← helpers (CNPJ, logging, formatação)
@@ -109,6 +112,21 @@ Colunas adicionadas ao arquivo de saída:
 
 ---
 
+## Uso — Interface Web (painel)
+
+A aplicação FastAPI serve um **painel web** na raiz (`http://localhost:8000/`), sem dependências adicionais (HTML/CSS/JS puro):
+
+- **Upload com arrastar e soltar** de CSV/XLSX/XLS
+- **Barra de progresso em tempo real** do cruzamento (polling a cada 2 s no endpoint de status)
+- **Estatísticas do resultado**: total, coincide, divergente e erros
+- **Download do CSV** processado com um clique
+- **Consulta rápida de um único CNPJ**
+- **Indicadores de saúde** (conexão com o banco e token da API) no cabeçalho
+
+O painel consome exclusivamente os endpoints REST existentes — nenhuma mudança de arquitetura foi necessária.
+
+---
+
 ## Uso — API REST
 
 ### Iniciar o servidor
@@ -117,22 +135,50 @@ Colunas adicionadas ao arquivo de saída:
 uvicorn api.main:app --reload
 ```
 
-Acesse a documentação interativa em: `http://localhost:8000/docs`
+- Painel web: `http://localhost:8000/`
+- Documentação interativa: `http://localhost:8000/docs`
+
+### Autenticação (Fase 1 — Segurança)
+
+Todos os endpoints de negócio exigem o header **`X-API-Key`** (apenas `/v1/health` é público).
+Gere uma chave forte com:
+
+```bash
+python -m api.keygen          # imprime uma chave nova no formato cnpj_xxx
+```
+
+Configure via variáveis de ambiente:
+
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `API_KEYS` | *(vazio)* | Lista separada por vírgula das chaves aceitas |
+| `AUTH_REQUIRED` | `true` | Desative apenas em desenvolvimento local |
+| `RATE_LIMIT_PER_MIN` | `60` | Requisições/minuto por chave+IP (`0` desativa) |
+| `MAX_UPLOAD_SIZE_MB` | `25` | Limite rígido de tamanho de upload |
+| `ENVIRONMENT` | `development` | Em `production`, config insegura aborta o startup |
 
 ### Endpoints
 
-| Método | Rota | Descrição |
-|---|---|---|
-| `GET` | `/health` | Status do sistema (DB + token API) |
-| `GET` | `/v1/cnpj/{cnpj}` | Consulta e cruzamento de um CNPJ |
-| `POST` | `/v1/cruzamento/upload` | Upload de CSV/XLSX para processamento em background |
-| `GET` | `/v1/cruzamento/{job_id}/status` | Status do job de processamento |
-| `GET` | `/v1/cruzamento/{job_id}/download` | Download do resultado quando concluído |
+| Método | Rota | Auth | Descrição |
+|---|---|---|---|
+| `GET` | `/` | — | Interface web (painel de cruzamento) |
+| `GET` | `/v1/health` | público | Status do sistema (DB + token API + auth) |
+| `GET` | `/v1/cnpj/{cnpj}` | 🔑 | Consulta e cruzamento de um CNPJ (valida dígitos verificadores) |
+| `POST` | `/v1/cruzamento/upload` | 🔑 | Upload de CSV/XLSX para processamento em background |
+| `GET` | `/v1/cruzamento/jobs` | 🔑 | Histórico de jobs (persistido — sobrevive a restart) |
+| `GET` | `/v1/cruzamento/{job_id}/status` | 🔑 | Status e progresso do job (`progresso_pct`, `processados`) |
+| `GET` | `/v1/cruzamento/{job_id}/download` | 🔑 | Download do resultado quando concluído |
+
+Proteções ativas na Fase 1: sanitização anti *path traversal* no nome do arquivo,
+leitura em chunks com limite de tamanho (HTTP 413), validação de extensão
+(`.csv/.xlsx/.xls`), rate limiting (HTTP 429 + `Retry-After`), verificação oficial
+de dígitos verificadores do CNPJ (módulo 11), redação de segredos em logs e
+headers de segurança (`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`).
 
 ### Exemplo — consulta unitária
 
 ```bash
-curl http://localhost:8000/v1/cnpj/00000000000191
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/v1/cnpj/00000000000191
 ```
 
 ### Exemplo — upload de arquivo
@@ -140,15 +186,58 @@ curl http://localhost:8000/v1/cnpj/00000000000191
 ```bash
 # 1. Enviar arquivo
 curl -X POST http://localhost:8000/v1/cruzamento/upload \
+  -H "X-API-Key: $API_KEY" \
   -F "file=@input/meus_cnpjs.csv"
 # Retorna: { "job_id": "abc-123", "status": "pending", ... }
 
 # 2. Verificar status
-curl http://localhost:8000/v1/cruzamento/abc-123/status
+curl -H "X-API-Key: $API_KEY" http://localhost:8000/v1/cruzamento/abc-123/status
 
 # 3. Baixar resultado
-curl -O http://localhost:8000/v1/cruzamento/abc-123/download
+curl -O -H "X-API-Key: $API_KEY" http://localhost:8000/v1/cruzamento/abc-123/download
 ```
+
+---
+
+## Testes automatizados
+
+Suíte permanente em `tests/` (**pytest + FastAPI TestClient**), sem necessidade de
+MySQL ou acesso à rede — banco e API externa são mockados:
+
+```bash
+pip install -r requirements.txt
+python -m pytest            # suíte completa
+python -m pytest -v tests/test_security.py   # módulo específico
+```
+
+| Arquivo | O que cobre |
+|---|---|
+| `tests/test_security.py` | Validação oficial de CNPJ (módulo 11), sanitização anti path traversal, rate limiter com relógio fake (determinístico), autenticação, redação de segredos em logs, checagem de config insegura |
+| `tests/test_jobs_persistencia.py` | Persistência SQLite, recuperação pós-restart (jobs `processing` viram `error`), throttle de gravação de progresso, listagem |
+| `tests/test_api_endpoints.py` | Endpoints reais: 401 sem/chave errada, 422 extensão vazia/DV inválido, 413 tamanho, traversal salvo apenas em `input/`, 404/409 em status/download, health público |
+| `tests/test_interface_web.py` | Painel servido em `/`, `/docs`, headers de segurança |
+| `tests/test_fase2_pipeline.py` | Pipeline assíncrono (httpx MockTransport): cache de API com TTL e isolamento por token, retries tenacity em 5xx/429 (e ausência de retry em 4xx), deduplicação de CNPJs, consulta DB em lote (1 round-trip) |
+
+### Fase 2 — desempenho no cruzamento em lote
+
+- **Consultas paralelas à API**: o processador agrupa todas as consultas HTTP
+  num pipeline `asyncio` com concorrência limitada (`API_CONCURRENCY`, padrão 5)
+  usando `httpx.AsyncClient` + `asyncio.Semaphore`.
+- **Deduplicação**: um mesmo CNPJ aparece uma única vez por arquivo → 1 chamada.
+- **Cache persistente** (`api_cache.db`, SQLite): respostas OK são reaproveitadas
+  pelo período de `API_CACHE_TTL_DIAS` (padrão 7; `0` desativa). O token nunca é
+  gravado — apenas um hash para invalidar entradas de outra conta. Métricas em
+  `GET /v1/cache/stats`.
+- **Retries reais**: `max_retries` da configuração agora é aplicado via
+  `tenacity` (backoff exponencial + jitter) para falhas de rede/5xx/429; erros
+  4xx (token inválido, CNPJ não encontrado) não são repetidos nem cacheados.
+- **Batch no MySQL**: a situação cadastral é buscada em UMA query `IN (...)`
+  por arquivo (antes: 1 round-trip por linha), com cache por conexão e fallback
+  automático para consultas individuais se o lote falhar.
+
+Configuração em `pytest.ini` + `tests/conftest.py` (variáveis de ambiente de teste
+isoladas em `.pytest_tmp/`; fixture `cnpjs_validos` gera 200 CNPJs sintéticos com
+DVs válidos usando implementação independente do algoritmo).
 
 ---
 
