@@ -135,8 +135,9 @@ O projeto está bem organizado em camadas (CLI, API REST, núcleo de processamen
 - [ ] CI/CD GitHub Actions + Trivy
 
 ### Fase 3 — Observabilidade & Interface (4–6 semanas)
-- [ ] `/metrics` Prometheus + dashboards Grafana
-- [ ] Logs estruturados + correlation-id + Sentry
+- [x] `/metrics` Prometheus protegido por API key (`api/routes/metrics.py`) + middleware de latência/contadores com labels normalizados — Fase 3
+- [ ] Dashboards Grafana (infra externa; documentação de scrape no README)
+- [x] Logs estruturados (`LOG_FORMAT=json`), correlation-id `X-Request-ID` em toda requisição/log, Sentry opcional via `SENTRY_DSN` — Fase 3
 - [x] Progresso de job em tempo real (polling) — implementado via callback no processor + campos `processados`/`progresso_pct` no `JobResponse`
 - [x] UI web — **Opção A entregue**: painel HTML/CSS/JS servido pelo FastAPI em `/` (`api/web/`), com upload drag&drop, barra de progresso, estatísticas, download e consulta rápida de CNPJ
 - [ ] UI web Fase 2 (React SPA) — futuro

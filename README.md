@@ -16,17 +16,21 @@ cnpj_cruzamento/      ← pacote principal de processamento
 api/                  ← API REST (FastAPI)
   main.py
   models.py
-  jobs.py
+  jobs.py             ← persistência de jobs em SQLite + métricas
+  keygen.py           ← gera hashes de API keys (bcrypt/sha256)
   routes/
     health.py         ← GET /v1/health
     cnpj.py           ← GET /v1/cnpj/{cnpj}
     cruzamento.py     ← POST/GET /v1/cruzamento/...
+    metrics.py        ← GET /metrics (Prometheus)
   web/
     ui.py             ← GET / (serve o painel)
     index.html        ← interface web (HTML/CSS/JS puro)
 src/
   config.py           ← configurações via .env + config.yaml
-  utils.py            ← helpers (CNPJ, logging, formatação)
+  security.py         ← autenticação, rate limiting, sanitização de upload
+  utils.py            ← helpers (CNPJ, logging estruturado, formatação)
+  observabilidade.py  ← correlation-id, métricas Prometheus, Sentry
 database/
   schema.sql          ← estrutura MySQL
 input/                ← arquivos CSV/XLSX para processar
@@ -168,6 +172,11 @@ Configure via variáveis de ambiente:
 | `GET` | `/v1/cruzamento/jobs` | 🔑 | Histórico de jobs (persistido — sobrevive a restart) |
 | `GET` | `/v1/cruzamento/{job_id}/status` | 🔑 | Status e progresso do job (`progresso_pct`, `processados`) |
 | `GET` | `/v1/cruzamento/{job_id}/download` | 🔑 | Download do resultado quando concluído |
+| `GET` | `/v1/cache/stats` | 🔑 | Estatísticas do cache de consultas (registros, hits) |
+| `GET` | `/metrics` | 🔑* | Métricas Prometheus (`METRICS_PUBLICA=true` libera scraping interno) |
+
+\* Todas as respostas da API incluem o header `X-Request-ID` (correlation-id),
+gerado ou propagado a cada requisição — útil para rastrear incidentes nos logs.
 
 Proteções ativas na Fase 1: sanitização anti *path traversal* no nome do arquivo,
 leitura em chunks com limite de tamanho (HTTP 413), validação de extensão
@@ -217,6 +226,7 @@ python -m pytest -v tests/test_security.py   # módulo específico
 | `tests/test_api_endpoints.py` | Endpoints reais: 401 sem/chave errada, 422 extensão vazia/DV inválido, 413 tamanho, traversal salvo apenas em `input/`, 404/409 em status/download, health público |
 | `tests/test_interface_web.py` | Painel servido em `/`, `/docs`, headers de segurança |
 | `tests/test_fase2_pipeline.py` | Pipeline assíncrono (httpx MockTransport): cache de API com TTL e isolamento por token, retries tenacity em 5xx/429 (e ausência de retry em 4xx), deduplicação de CNPJs, consulta DB em lote (1 round-trip) |
+| `tests/test_observabilidade.py` | Correlation-id (`X-Request-ID` gerado/propagado/único), `/metrics` com 401 sem chave e formato Prometheus válido, normalização de labels anti-cardinalidade, métricas no-op seguras, logs `LOG_FORMAT=json/text` parseáveis com request_id |
 
 ### Fase 2 — desempenho no cruzamento em lote
 
@@ -238,6 +248,50 @@ python -m pytest -v tests/test_security.py   # módulo específico
 Configuração em `pytest.ini` + `tests/conftest.py` (variáveis de ambiente de teste
 isoladas em `.pytest_tmp/`; fixture `cnpjs_validos` gera 200 CNPJs sintéticos com
 DVs válidos usando implementação independente do algoritmo).
+
+---
+
+## Observabilidade (Fase 3)
+
+### Métricas Prometheus — `GET /metrics`
+Protegido por API key por padrão (`METRICS_PUBLICA=true` libera para scraping em
+rede interna). Séries expostas:
+
+| Métrica | Tipo | Descrição |
+|---|---|---|
+| `http_requests_total{method,path,status}` | Counter | Requisições por rota normalizada (ids dinâmicos colapsam em `{id}` — sem explosão de cardinalidade) |
+| `http_request_duration_seconds` | Histogram | Latência das requisições (buckets até 60s) |
+| `invertexto_consultas_total{resultado}` | Counter | Consultas à API externa: `ok`, `erro`, `cache_hit` |
+| `api_cache_registros` | Gauge | Entradas no cache local |
+| `cruzamento_jobs_ativos` | Gauge | Jobs em processamento |
+
+Configure o scrape a cada 15s com o Prometheus apontando para `http://<host>:8000/metrics`
+e monte dashboards no Grafana (datasource Prometheus).
+
+### Logs estruturados + correlation-id
+- `LOG_FORMAT=json` → uma linha JSON por log (timestamp ISO, nível, mensagem,
+  `request_id`, exceção serializada) — pronto para Loki/ELK. Padrão `text` inclui
+  `[request_id]` legível.
+- Toda requisição ganha um `X-Request-ID` (gerado ou propagado do cliente); o mesmo
+  ID aparece nos logs e pode ser enviado ao suporte/Sentry para rastrear o incidente
+  ponta a ponta.
+
+### Sentry (opcional)
+```bash
+pip install sentry-sdk
+# .env
+SENTRY_DSN=https://xxxx@sentry.io/123456
+SENTRY_TRACES_SAMPLE_RATE=0.1   # 0 desativa tracing; erros sempre são capturados
+```
+Cada evento captura o `request_id` correspondente, ligando o erro à requisição exata.
+
+### Configuração (`.env`)
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `LOG_FORMAT` | `text` | `text` ou `json` (logs estruturados) |
+| `METRICS_PUBLICA` | `false` | Se `true`, `/metrics` dispensa API key |
+| `SENTRY_DSN` | vazio | Vazio = Sentry desativado |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0.0` | Amostragem de traces distribuídos |
 
 ---
 
