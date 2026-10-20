@@ -1,18 +1,31 @@
 """
 Lógica de cruzamento e comparação de dados de CNPJs.
+
+Fase 2: as consultas à API externa passaram a ser executadas por um pipeline
+assíncrono com concorrência limitada (httpx.AsyncClient + asyncio.Semaphore),
+mantendo o resultado final idêntico ao processamento sequencial. A consulta
+ao banco local continua síncrona (thread pool) para preservar a compatibilidade
+com conexões mysql-connector existentes.
 """
+import asyncio
 import re
 import csv
 import logging
 import time
 import os
+from typing import Callable, Optional
 
+import httpx
 import pandas as pd
 
-from .db import consultar_situacao_db
-from .api import consultar_cnpj_api
+from .db import consultar_situacao_db, preparar_lote
+from .api import consultar_cnpj_api_async
 
 logger = logging.getLogger(__name__)
+
+
+def _concorrencia_padrao() -> int:
+    return max(1, int(os.getenv("API_CONCURRENCY", "5")))
 
 
 def _ler_arquivo(caminho: str) -> pd.DataFrame | None:
@@ -60,10 +73,18 @@ def _formatar_cnpj(valor) -> str | None:
     return limpo.zfill(14) if len(limpo) == 14 else None
 
 
-def processar_arquivo(caminho_arquivo: str, conn, config: dict) -> dict:
+def processar_arquivo(
+    caminho_arquivo: str,
+    conn,
+    config: dict,
+    callback_progresso: Optional[Callable[[dict], None]] = None,
+) -> dict:
     """
     Processa um arquivo CSV/XLSX: consulta DB + API, cruza resultados e salva saída.
     Retorna dict com estatísticas do processamento.
+
+    callback_progresso: função opcional chamada periodicamente com um dict contendo
+    {'total', 'processados', 'progresso_pct'} para permitir acompanhamento em tempo real.
     """
     nome = os.path.basename(caminho_arquivo)
     logger.info(f"Iniciando processamento: {nome}")
@@ -122,20 +143,90 @@ def processar_arquivo(caminho_arquivo: str, conn, config: dict) -> dict:
     api_config = config['api_config']
 
     inicio = time.time()
-    ultimo_log = inicio
+
+    # ------------------------------------------------------------------
+    # Fase A — consultas à API externa (assíncronas, concorrência limitada)
+    # CNPJs duplicados no arquivo geram UMA chamada; progresso é reportado
+    # a cada 10% concluído da etapa de API.
+    # ------------------------------------------------------------------
+    cnpjs_validos = [c for c in df['_cnpj_limpo'].tolist() if c]
+    chaves_unicas = list(dict.fromkeys(cnpjs_validos))
+    total_api = len(chaves_unicas)
+
+    def _notificar(p: dict):
+        if callback_progresso:
+            try:
+                callback_progresso(p)
+            except Exception as e:
+                logger.warning(f"Falha no callback de progresso: {e}")
+
+    # Implementação principal: gather + mapeamento explícito (robusta e simples).
+    async def _pipeline_api_com_progresso():
+        sem = asyncio.Semaphore(_concorrencia_padrao())
+        resultados: dict[str, dict] = {}
+        progresso = {'feitos': 0, 'ultimo_reporte': -1}
+
+        async def _uma(cnpj_ref: str):
+            r = await consultar_cnpj_api_async(cnpj_ref, api_config,
+                                               config['column_config'],
+                                               cliente=_cliente, semaphore=sem)
+            resultados[cnpj_ref] = r
+            progresso['feitos'] += 1
+            pct = round(progresso['feitos'] / total_api * 100) if total_api else 100
+            if pct >= progresso['ultimo_reporte'] + 10 or progresso['feitos'] == total_api:
+                progresso['ultimo_reporte'] = pct
+                _notificar({'total': total, 'processados': progresso['feitos'],
+                            'progresso_pct': round(progresso['feitos'] / total_api * 100, 1) if total_api else 100.0})
+
+        async with httpx.AsyncClient(timeout=api_config.get('timeout', 15)) as _cliente:
+            await asyncio.gather(*[_uma(c) for c in chaves_unicas])
+        return resultados
+
+    resultados_api: dict[str, dict] = {}
+    if total_api:
+        try:
+            resultados_api = asyncio.run(_pipeline_api_com_progresso())
+        except RuntimeError:
+            # Já existe um event loop rodando (ex.: uso dentro de app assíncrono):
+            # executa em thread separada com loop próprio.
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                resultados_api = ex.submit(
+                    lambda: asyncio.run(_pipeline_api_com_progresso())
+                ).result()
+
+    # Registra todos os CNPJs válidos para que a 1ª consulta DB dispare uma
+    # única query em lote (batch IN) em vez de N round-trips.
+    preparar_lote(conn, chaves_unicas)
+
+    # ------------------------------------------------------------------
+    # Fase B — consulta DB + comparação (sequencial, determinística)
+    # ------------------------------------------------------------------
+    ultimo_log = time.time()
 
     for index, row in df.iterrows():
         cnpj = row['_cnpj_limpo']
 
-        # Log de progresso a cada 2 segundos
         agora = time.time()
-        if agora - ultimo_log >= 2 or (index + 1) == total:
+        intervalo = config['system_config'].get('update_interval', 2)
+        if agora - ultimo_log >= intervalo or (index + 1) == total:
             decorrido = agora - inicio
             vel = (index + 1) / decorrido if decorrido > 0 else 0
             restante = (total - (index + 1)) / vel if vel > 0 else 0
             logger.info(f"Progresso: {index + 1}/{total} ({(index+1)/total*100:.1f}%) "
                         f"| {vel:.1f} CNPJs/s | restante: {restante:.0f}s")
             ultimo_log = agora
+
+            # Notifica o observador externo (ex.: API/UI) sobre o progresso
+            if callback_progresso:
+                try:
+                    callback_progresso({
+                        'total': total,
+                        'processados': int(index) + 1,
+                        'progresso_pct': round((index + 1) / total * 100, 1) if total else 0.0,
+                    })
+                except Exception as e:
+                    logger.warning(f"Falha no callback de progresso: {e}")
 
         if not cnpj:
             df.at[index, col_status_db] = 'CNPJ INVÁLIDO'
@@ -152,8 +243,8 @@ def processar_arquivo(caminho_arquivo: str, conn, config: dict) -> dict:
         if "NÃO ENCONTRADO" in status_db:
             stats['nao_encontrado_db'] += 1
 
-        # Consulta API
-        resultado_api = consultar_cnpj_api(cnpj, api_config, config['column_config'])
+        # Resultado da API (Fase A — cacheado/concorrente)
+        resultado_api = resultados_api.get(cnpj) or {col_erro_api: "ERRO GERAL"}
         status_api = resultado_api.get(col_status_api, 'ERRO NA API').upper()
 
         if resultado_api.get(col_erro_api) == "OK":

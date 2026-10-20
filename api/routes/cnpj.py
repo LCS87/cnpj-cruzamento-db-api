@@ -1,18 +1,22 @@
 """
 Rota de consulta unitária de CNPJ.
+
+Protegida por X-API-Key + rate limiting; usa validação oficial de dígitos
+verificadores do CNPJ (módulo 11).
 """
 import re
 import sys
 import os
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 from config import DB_CONFIG, API_CONFIG, COLUMN_CONFIG, SITUACAO_MAP, MOTIVO_MAP, YAML_CONFIG
+import security
 from cnpj_cruzamento.db import get_db_connection, consultar_situacao_db
 from cnpj_cruzamento.api import consultar_cnpj_api
 from api.models import CnpjResultado
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(security.verificar_api_key)])
 
 TABELA = (YAML_CONFIG or {}).get('database', {}).get('table', 'estabelecimentos')
 DB_COLS = COLUMN_CONFIG['db']
@@ -30,6 +34,11 @@ def consultar_cnpj(cnpj: str):
     cnpj_limpo = _limpar_cnpj(cnpj)
     if not cnpj_limpo:
         raise HTTPException(status_code=422, detail="CNPJ inválido. Informe 14 dígitos numéricos.")
+    if not security.validar_cnpj_oficial(cnpj_limpo):
+        raise HTTPException(
+            status_code=422,
+            detail="CNPJ inválido: dígitos verificadores não conferem.",
+        )
 
     conn = get_db_connection(DB_CONFIG)
     if not conn:

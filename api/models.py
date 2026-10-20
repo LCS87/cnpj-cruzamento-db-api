@@ -29,15 +29,20 @@ class JobResponse(BaseModel):
     status: JobStatus
     arquivo: Optional[str] = None
     total: Optional[int] = None
+    processados: int = 0
+    progresso_pct: float = 0.0
     coincide: Optional[int] = None
     divergente: Optional[int] = None
     erros: Optional[int] = None
     tempo_segundos: Optional[float] = None
     download_url: Optional[str] = None
     mensagem: Optional[str] = None
+    criado_em: Optional[str] = None
+    atualizado_em: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
     status: str
     db: str
     api_token: str
+    auth: str = "desativada"
