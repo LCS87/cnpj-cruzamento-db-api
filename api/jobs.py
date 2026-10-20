@@ -163,12 +163,23 @@ def atualizar_job(job_id: str, **kwargs):
     dados.update(kwargs)
     job = JobResponse(**dados)
     _cache[job_id] = job
+    _atualizar_gauge_jobs()
     if not _deve_persistir_agora(job):
         return
     try:
         _persistir(job)
     except Exception as e:  # persistência não deve derrubar o processamento
         logger.warning(f"Falha ao persistir job {job_id}: {e}")
+
+
+def _atualizar_gauge_jobs():
+    """Atualiza a métrica Prometheus de jobs ativos (Fase 3; no-op se indisponível)."""
+    try:
+        import observabilidade as obs
+        ativos = sum(1 for j in _cache.values() if j.status == JobStatus.processing)
+        obs.atualizar_gauges(ativos)
+    except Exception:
+        pass
 
 
 def obter_job(job_id: str) -> Optional[JobResponse]:

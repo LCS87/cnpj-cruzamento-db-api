@@ -9,19 +9,61 @@ from pathlib import Path
 
 # Configurar logging
 def setup_logging(log_level='INFO', log_file='cnpj_cruzamento.log'):
-    """Configura o sistema de logging"""
-    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    # Configurar logger raiz
-    logging.basicConfig(
-        level=getattr(logging, log_level),
-        format=log_format,
-        handlers=[
-            logging.FileHandler(log_file, encoding='utf-8'),
-            logging.StreamHandler()
-        ]
+    """Configura o sistema de logging.
+
+    Com LOG_FORMAT=json (Fase 3 - observabilidade), cada linha vira um objeto
+    JSON com timestamp ISO, logger, nivel, mensagem, correlation-id
+    (request_id) e excecao serializada - pronto para Loki/ELK/Sentry.
+    Padrao: texto legivel com request_id embutido.
+    """
+    import json as _json
+    import os as _os
+
+    formato_json = _os.getenv("LOG_FORMAT", "text").lower() == "json"
+
+    class RequestIdFilter(logging.Filter):
+        def filter(self, record):
+            if not hasattr(record, "request_id"):
+                try:
+                    import observabilidade as _obs
+                    record.request_id = _obs.REQUEST_ID.get()
+                except Exception:
+                    record.request_id = "-"
+            return True
+
+    class JsonFormatter(logging.Formatter):
+        def format(self, record):
+            payload = {
+                "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
+                "logger": record.name,
+                "level": record.levelname,
+                "message": record.getMessage(),
+                "request_id": getattr(record, "request_id", "-"),
+            }
+            if record.exc_info:
+                payload["exception"] = self.formatException(record.exc_info)
+            return _json.dumps(payload, ensure_ascii=False, default=str)
+
+    formatter = JsonFormatter() if formato_json else logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] %(message)s'
     )
-    
+    filtro = RequestIdFilter()
+
+    handlers = [
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler(),
+    ]
+    for h in handlers:
+        h.setFormatter(formatter)
+        h.addFilter(filtro)
+
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, log_level))
+    for h in list(root.handlers):
+        root.removeHandler(h)
+    for h in handlers:
+        root.addHandler(h)
+
     return logging.getLogger(__name__)
 
 # Utilitários de CNPJ

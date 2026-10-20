@@ -18,6 +18,18 @@ from tenacity import (
 
 from . import cache
 
+try:  # observabilidade é opcional; nunca deve quebrar o pipeline
+    import os as _os
+    import sys as _sys
+    _sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..', 'src'))
+    import observabilidade as obs
+except ImportError:  # pragma: no cover
+    class _ObsNoop:
+        @staticmethod
+        def metrica_api(*_a, **_k):
+            pass
+    obs = _ObsNoop()
+
 logger = logging.getLogger(__name__)
 
 
@@ -87,6 +99,7 @@ def consultar_cnpj_api(cnpj_limpo: str, api_config: dict, col_config: dict) -> d
 
     em_cache = cache.obter(cnpj_limpo, token)
     if em_cache is not None:
+        obs.metrica_api("cache_hit")
         return em_cache
 
     url = f"{base_url}{cnpj_limpo}"
@@ -116,9 +129,11 @@ def consultar_cnpj_api(cnpj_limpo: str, api_config: dict, col_config: dict) -> d
             exc = httpx.HTTPStatusError("erro", request=resposta.request, response=resposta)
             resultado = _resposta_de_erro(exc, col_config)
             logger.warning(f"Erro HTTP ao consultar CNPJ {cnpj_limpo}: {resultado[col_erro]}")
+            obs.metrica_api("erro")
             return resultado
         resultado = _tratar_resposta(resposta, col_config)
         cache.gravar(cnpj_limpo, token, resultado)
+        obs.metrica_api("ok")
         return resultado
     except TransientAPIError as e:
         logger.warning(f"Esgotados os retries para CNPJ {cnpj_limpo}: {e}")
@@ -153,6 +168,7 @@ async def consultar_cnpj_api_async(
 
     em_cache = cache.obter(cnpj_limpo, token)
     if em_cache is not None:
+        obs.metrica_api("cache_hit")
         return em_cache
 
     url = f"{base_url}{cnpj_limpo}"
@@ -178,10 +194,12 @@ async def consultar_cnpj_api_async(
                     exc = httpx.HTTPStatusError("erro", request=resposta.request, response=resposta)
                     resultado = _resposta_de_erro(exc, col_config)
                     logger.warning(f"Erro HTTP ao consultar CNPJ {cnpj_limpo}: {resultado[col_erro]}")
+                    obs.metrica_api("erro")
                     return resultado
 
                 resultado = _tratar_resposta(resposta, col_config)
                 cache.gravar(cnpj_limpo, token, resultado)
+                obs.metrica_api("ok")
                 return resultado
             except (httpx.TransportError, TransientAPIError) as e:
                 if tentativa < max_retries - 1:

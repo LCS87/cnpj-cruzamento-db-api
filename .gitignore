@@ -1,14 +1,18 @@
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-.vscode/
-.idea/
-*.swp
-*.swo
-*.log
-*.tmp
+# Ambiente e segredos
 .env
-.env.local
-*.env.*
-api_cache.db*
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+.pytest_tmp/
+*.egg-info/
+
+# Artefatos locais de execução
+jobs.db
+api_cache.db
+*.log
+input/*
+output_cruzamento/*
+!input/.gitkeep
+!output_cruzamento/.gitkeep
